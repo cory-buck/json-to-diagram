@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf8" />
+    <script>
+        const exports = {};
+    </script>
+    <script src="../dist/json-to-diagram.js"></script>
+    <script src="../data/test.js"></script>
+
+</head>
+
+<body>
+    <div id="outlet"> </div>
+
+    <script>
+        jsonToDiagram(document.getElementById("outlet"), data);
+    </script>
+</body>
+
+</html>

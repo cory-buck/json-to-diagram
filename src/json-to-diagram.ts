@@ -2,7 +2,20 @@ export interface Json {
     [prop: string]: string | number | Json
 }
 
-export function jsonToDiagram(target: HTMLElement, json: Json) {
+(function (global) {
+
+    //HTML ELEMENT MANIPULATION 
+
+    function createElement(tagName: string, style?: Json) {
+        const elm = document.createElement(tagName);
+        if (style) {
+            const keys: string[] = Object.getOwnPropertyNames(style);
+            for (let i = 0; i < keys.length; i++) {
+                elm.style[keys[i]] = style[keys[i]];
+            }
+        }
+        return elm;
+    }
 
     //STYLES 
 
@@ -99,7 +112,7 @@ export function jsonToDiagram(target: HTMLElement, json: Json) {
     };
 
     const popupStyle = {
-        position:"absolute",
+        position: "absolute",
         padding: ".25rem .5rem",
         border: "1px solid rgba(0,0,0,.3)",
         borderRadius: ".25rem",
@@ -109,232 +122,267 @@ export function jsonToDiagram(target: HTMLElement, json: Json) {
         backgroundColor: "white"
     }
 
-    //JSON TO DIAGRAM
 
-    function createNode(parent: HTMLElement, name: string, json: Json | string | number): HTMLElement {
-        const nodeHasChildren = typeof json === "object";
+    function jsonToDiagram(target: HTMLElement, json: Json) {
 
-        const node = createElement('div', nodeHasChildren ? nodeNonEmptyStyle : nodeEmptyStyle);
-        addClass(node, "node");
+        ///INITIALIZE
+        let building = false;
+        let buildPending = false;
 
-        if (parent.classList.contains('node-body')){
-            addClass(node, 'child-node');            
-        }
-        appendChild(parent, node);
+        //USED TO REMOVE HOVER LISTENERS
+        let cleanUpFns: Function[] = [];
 
-        if(!nodeHasChildren) addClass(node, 'leaf-node');
+        let container: HTMLElement;
+        let currentJson: Json;
 
-        appendChild(node, createNodeHeader(name, nodeHasChildren));
-        createNodeBody(node, json);
+        function init() {
+            if (!target) throw new Error("'target' was not provided.");
+            if (!json) throw new Error("'json' was not provided.");
 
-        return node;
-    }
 
-    function createNodeHeader(name: string, hasChildren: boolean) {
-        const nodeHeader = createElement('div', nodeHeaderStyle);
-        addClass(nodeHeader, "node-header");
-        appendChild(nodeHeader, createNodeIcon(hasChildren));
-        appendChild(nodeHeader,  createNodeTitle(name));
-        return nodeHeader;
-    }
+            //init container
+            container = createElement('div', { overflow: "auto", padding: "50px" });
+            target.appendChild(container);
 
-    function createNodeIcon(hasChildren: boolean): HTMLElement {
-        return createElement('span', Object.assign(
-            {},
-            nodeIconBaseStyle,
-            hasChildren
-                ? nodeNonEmptyIconStyle
-                : nodeEmptyIconStyle
-        ));
-    }
+            //init json
+            currentJson = json;
 
-    function createNodeTitle(name: string) {
-        const elm = createElement('span', nodeTitleStyle);
-        elm.innerText = name;
-        return elm;
-    }
+            //first build of diagram
+            buildDiagram();
 
-    function createNodeBody(parent: HTMLElement, json: Json | string | number) {
-        const body = createElement('div', nodeBodyStyle);
-        addClass(body, "node-body");
-        appendChild(parent, body);
+            //listen for resize, rebuild as needed
+            window.addEventListener('resize', rebuild);
 
-        if (typeof json === "object") {
-            const keys = Object.getOwnPropertyNames(json);
-            //add child nodes
-            for (let i = 0; i < keys.length; i++) {
-                createNode(body, keys[i], json[keys[i]]);
+            return {
+                setJson,
+                rebuild,
+                destroy
             }
-            //add connections
-            for (let i = 0; i < keys.length; i++) {
-                createConnection(parent, parent.children[1].children[i] as HTMLElement);
+        }
+
+        function buildDiagram() {
+            if (building) {
+                buildPending = true;
+                return;
             }
-        } else {
-            createNodeContentPopup(parent, json.toString());
-        }
-    }
+            building = true;
 
-    function createNodeContentPopup(parent: HTMLElement, value: string){
-        const popup = createElement('span', Object.assign(
-            {
-                left: (parent.children[0] as HTMLElement).offsetWidth + "px"
-            },
-            popupStyle
-        ));
-        appendChild(parent as HTMLElement, popup);
-        popup.innerText = value;
+            console.time('BUILT JSON DIAGRAM');
+            const _json = currentJson;
+            const rootKeys = Object.getOwnPropertyNames(_json);
+            for (let i = 0; i < rootKeys.length; i++) {
+                createNode(container, rootKeys[i], _json[rootKeys[i]]);
+            }
+            console.timeEnd('BUILT JSON DIAGRAM');
 
-        parent.children[0].addEventListener('mouseenter', ()=>{ popup.style.display = "" });
-        parent.children[0].addEventListener('mouseleave', ()=>{ popup.style.display = "none" });
-    }
-
-    function createConnection(parent: HTMLElement, child: HTMLElement) {
-
-        const pH = parent.children[0] as HTMLElement; //parent header
-        const cH = child.children[0] as HTMLElement   //child header
-
-        const p1 = {
-            x: pH.offsetLeft,
-            y: pH.offsetTop + pH.offsetHeight / 2
+            //THROTTLE PENDING BUILDS
+            setTimeout(() => {
+                building = false;
+                if (buildPending) {
+                    buildPending = false;
+                    rebuild();
+                }
+            }, 50);
         }
 
-        const p2 = {
-            x: cH.offsetLeft,
-            y: child.offsetTop + child.offsetHeight / 2 + 1
+        function cleanup() {
+            //remove event listeners for all leaf nodes
+            for (let i = 0; i < cleanUpFns.length; i++) {
+                cleanUpFns[i]();
+            }
+            cleanUpFns = [];
+
+            //remove child nodes
+            while (container.children.length > 0) {
+                container.removeChild(container.children[0]);
+            }
         }
 
-        const cStyle = {
-            left: pH.offsetWidth + "px",
-            top: Math.min(p1.y, p2.y) + "px",
-            height: (Math.max(p1.y, p2.y) - Math.min(p1.y, p2.y)) + "px",
-            width: child.offsetLeft - pH.offsetWidth + "px"
+        function rebuild() {
+            cleanup();
+            buildDiagram();
         }
 
-        if (Math.abs(p1.y - p2.y) > 5) {
-            if (p1.y < p2.y) {
-                parent.appendChild(createArrowDownConnector(cStyle));
+        function destroy() {
+            //remove resize listener
+            window.removeEventListener('resize', rebuild);
+            //cleanup
+            cleanup();
+        }
+
+        function setJson(json: Json) {
+            if (!json) throw new Error("'json' was not provided.");
+            currentJson = json
+            rebuild();
+        }
+
+        //JSON TO DIAGRAM HELPERS
+
+        function createNode(parent: HTMLElement, name: string, json: Json | string | number): HTMLElement {
+            const nodeHasChildren = typeof json === "object";
+
+            const node = createElement('div', nodeHasChildren ? nodeNonEmptyStyle : nodeEmptyStyle);
+            node.classList.add("node");
+
+            if (parent.classList.contains('node-body')) {
+                node.classList.add("child-node");
+            }
+            parent.appendChild(node);
+
+            if (!nodeHasChildren) node.classList.add("leaf-node");
+
+            node.appendChild(createNodeHeader(name, nodeHasChildren));
+            createNodeBody(node, json);
+
+            return node;
+        }
+
+        function createNodeHeader(name: string, hasChildren: boolean) {
+            const nodeHeader = createElement('div', nodeHeaderStyle);
+            nodeHeader.classList.add("node-header");
+            nodeHeader.appendChild(createNodeIcon(hasChildren));
+            nodeHeader.appendChild(createNodeTitle(name));
+            return nodeHeader;
+        }
+
+        function createNodeIcon(hasChildren: boolean): HTMLElement {
+            return createElement('span', Object.assign(
+                {},
+                nodeIconBaseStyle,
+                hasChildren
+                    ? nodeNonEmptyIconStyle
+                    : nodeEmptyIconStyle
+            ));
+        }
+
+        function createNodeTitle(name: string) {
+            const elm = createElement('span', nodeTitleStyle);
+            elm.innerText = name;
+            return elm;
+        }
+
+        function createNodeBody(parent: HTMLElement, json: Json | string | number) {
+            const body = createElement('div', nodeBodyStyle);
+            body.classList.add("node-body");
+            parent.appendChild(body);
+
+            if (typeof json === "object") {
+                const keys = Object.getOwnPropertyNames(json);
+                //add child nodes
+                for (let i = 0; i < keys.length; i++) {
+                    createNode(body, keys[i], json[keys[i]]);
+                }
+                //add connections
+                for (let i = 0; i < keys.length; i++) {
+                    createConnection(parent, parent.children[1].children[i] as HTMLElement);
+                }
             } else {
-                parent.appendChild(createArrowUpConnector(cStyle));
+                createNodeContentPopup(parent, json.toString());
             }
-        } else {
-            parent.append(createStraightConnector(cStyle));
-        }
-    }
-
-    function createArrowUpConnector(cStyle) {
-        return createConnector(
-            cStyle,
-            {},
-            connectorUpRight,
-            connectorRightUp,
-            {}
-        )
-    }
-
-    function createArrowDownConnector(cStyle) {
-        return createConnector(
-            cStyle,
-            connectorRightDown,
-            {},
-            {},
-            connectorDownRight
-        )
-    }
-
-    function createStraightConnector(cStyle) {
-        return createElement('span', Object.assign({}, straightConnectorStyle, {
-            top: cStyle.top,
-            left: cStyle.left,
-            width: cStyle.width
-        }));
-    }
-
-    function createConnector(
-        cStyle: any,
-        style1: Json,
-        style2: Json,
-        style3: Json,
-        style4: Json) {
-        let c = createElement('div', Object.assign({}, connector, cStyle));
-        addClass(c, 'connector');
-        appendChild(c, createElement('span', Object.assign({ width: "25%" }, connectorBlock, style1)));
-        appendChild(c, createElement('span', Object.assign({ width: "75%" }, connectorBlock, style2)));
-        appendChild(c, createElement('span', Object.assign({ width: "25%" }, connectorBlock, style3)));
-        appendChild(c, createElement('span', Object.assign({ width: "75%" }, connectorBlock, style4)));
-        return c;
-    }
-
-
-    //HTML ELEMENT MANIPULATION 
-
-    function createElement(tagName: string, style?: Json) {
-        const elm = document.createElement(tagName);
-        if (style) setStyle(elm, style);
-        return elm;
-    }
-
-    function setStyle(elm: HTMLElement, json: Json) {
-        const keys: string[] = Object.getOwnPropertyNames(json);
-        for (let i = 0; i < keys.length; i++) {
-            elm.style[keys[i]] = json[keys[i]];
-        }
-    }
-
-    function appendChild(parent: HTMLElement, child: HTMLElement) {
-        parent.appendChild(child);
-    }
-
-    function removeChild(parent: HTMLElement, child: HTMLElement){
-        parent.removeChild(child);
-    }
-
-    function addClass(elm: HTMLElement, className: string) {
-        elm.classList.add(className);
-    }
-
-    //BUILD DIAGRAM
-    let building = false;
-    let buildPending = false;
-    function buildDiagram(container: HTMLElement){
-        if(building){
-            buildPending = true;
-            return;
-        }
-        building = true;
-
-        for(let child of container.children){
-            removeChild(container, child as HTMLElement);
         }
 
-        console.time('BUILT JSON DIAGRAM');
-        const rootKeys = Object.getOwnPropertyNames(json);
-        for(let i = 0; i < rootKeys.length; i++){
-            createNode(container, rootKeys[i], json[rootKeys[i]]);
-        }    
-        console.timeEnd('BUILT JSON DIAGRAM');
+        function createNodeContentPopup(parent: HTMLElement, value: string) {
+            const popup = createElement('span', Object.assign(
+                {
+                    left: (parent.children[0] as HTMLElement).offsetWidth + "px"
+                },
+                popupStyle
+            ));
+            const showPopup = () => { popup.style.display = "" };
+            const hidePopup = () => { popup.style.display = "none" };
 
-        //THROTTLE PENDING BUILDS
-        setTimeout(()=>{ 
-            building = false;
-            if(buildPending){
-                buildPending = false;
-                buildDiagram(container);
+            parent.appendChild(popup);
+            popup.innerText = value;
+
+            parent.children[0].addEventListener('mouseenter', showPopup);
+            parent.children[0].addEventListener('mouseleave', hidePopup);
+            cleanUpFns.push(() => {
+                parent.children[0].removeEventListener('mouseenter', showPopup);
+                parent.children[0].removeEventListener('mouseleave', hidePopup);
+            })
+        }
+
+        function createConnection(parent: HTMLElement, child: HTMLElement) {
+
+            const pH = parent.children[0] as HTMLElement; //parent header
+            const cH = child.children[0] as HTMLElement   //child header
+
+            const p1 = {
+                x: pH.offsetLeft,
+                y: pH.offsetTop + pH.offsetHeight / 2
             }
-        }, 50);
+
+            const p2 = {
+                x: cH.offsetLeft,
+                y: child.offsetTop + child.offsetHeight / 2 + 1
+            }
+
+            const cStyle = {
+                left: pH.offsetWidth + "px",
+                top: Math.min(p1.y, p2.y) + "px",
+                height: (Math.max(p1.y, p2.y) - Math.min(p1.y, p2.y)) + "px",
+                width: child.offsetLeft - pH.offsetWidth + "px"
+            }
+
+            if (Math.abs(p1.y - p2.y) > 5) {
+                if (p1.y < p2.y) {
+                    parent.appendChild(createArrowDownConnector(cStyle));
+                } else {
+                    parent.appendChild(createArrowUpConnector(cStyle));
+                }
+            } else {
+                parent.appendChild(createStraightConnector(cStyle));
+            }
+        }
+
+        function createArrowUpConnector(cStyle) {
+            return createConnector(
+                cStyle,
+                {},
+                connectorUpRight,
+                connectorRightUp,
+                {}
+            )
+        }
+
+        function createArrowDownConnector(cStyle) {
+            return createConnector(
+                cStyle,
+                connectorRightDown,
+                {},
+                {},
+                connectorDownRight
+            )
+        }
+
+        function createStraightConnector(cStyle) {
+            return createElement('span', Object.assign({}, straightConnectorStyle, {
+                top: cStyle.top,
+                left: cStyle.left,
+                width: cStyle.width
+            }));
+        }
+
+        function createConnector(
+            cStyle: any,
+            style1: Json,
+            style2: Json,
+            style3: Json,
+            style4: Json) {
+            let c = createElement('div', Object.assign({}, connector, cStyle));
+            c.classList.add("node-connector");
+            c.appendChild(createElement('span', Object.assign({ width: "25%" }, connectorBlock, style1)));
+            c.appendChild(createElement('span', Object.assign({ width: "75%" }, connectorBlock, style2)));
+            c.appendChild(createElement('span', Object.assign({ width: "25%" }, connectorBlock, style3)));
+            c.appendChild(createElement('span', Object.assign({ width: "75%" }, connectorBlock, style4)));
+            return c;
+        }
+
+        return init();
     }
 
-    //INITIALIZE
-    function init(){
-        if (!target) throw new Error("'target' was not provided.");
-        if (!json) throw new Error("'json' was not provided.");
-        
-        const container = createElement('div', { overflow: "auto", padding: "50px" });
-        appendChild(target, container);
-        //first build of diagram
-        buildDiagram(container as HTMLElement);
-        //listen for resize, rebuild as needed
-        window.addEventListener('resize', ()=>{ buildDiagram(container); });
-    }
 
-    init();
-}
+
+    (global as any).jsonToDiagram = jsonToDiagram;
+
+})(window);
